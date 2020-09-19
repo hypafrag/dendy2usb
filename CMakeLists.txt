@@ -1,30 +1,19 @@
 # I target a recent cmake, it shouldn't be a problem on a dev machine
 cmake_minimum_required(VERSION 3.7)
 # Project name
-project("My Firmware")
+project("dendy2usb")
 
 # Product filename
-set(PRODUCT_NAME my_firmware)
+set(PRODUCT_NAME dendy2usb)
+
+set(LUFA_ROOT_PATH lufa/LUFA)
+set(ARCH AVR8)
 
 ## AVR Chip Configuration
-set(F_CPU 8000000UL)
+set(F_CPU 16000000UL)
 # CPU, you can find the list here:
 # https://gcc.gnu.org/onlinedocs/gcc/AVR-Options.html
-set(MCU atmega8)
-# Default Baudrate for UART, read avr include/util/setbaud.h for usage
-set(BAUD 9600)
-# The programmer to use, read avrdude manual for list
-set(PROG_TYPE linuxgpio)
-
-set(SSH_LOGIN pi@cato.local)
-
-set(AVRDUDE ssh ${SSH_LOGIN} sudo avrdude)
-
-# AVR Fuses, must be in concordance with your hardware and F_CPU
-# http://eleccelerator.com/fusecalc/fusecalc.php
-set(H_FUSE 0xd9)
-set(L_FUSE 0xff)
-
+set(MCU at90usb162)
 
 # Use AVR GCC toolchain
 set(CMAKE_SYSTEM_NAME Generic)
@@ -32,21 +21,64 @@ set(CMAKE_CXX_COMPILER avr-g++)
 set(CMAKE_C_COMPILER avr-gcc)
 set(CMAKE_ASM_COMPILER avr-gcc)
 
-
 # Pass defines to compiler
 add_definitions(
-    -DF_CPU=${F_CPU}
-    -DBAUD=${BAUD}
+	-DF_CPU=${F_CPU}
+	-DF_USB=${F_CPU}
+	-DUSE_LUFA_CONFIG_HEADER
 )
 # mmcu MUST be passed to bot the compiler and linker, this handle the linker
 set(CMAKE_EXE_LINKER_FLAGS -mmcu=${MCU})
 
 add_compile_options(
-    -mmcu=${MCU} # MCU
-    -Os # optimize
+	-mmcu=${MCU} # MCU
+	-Os # optimize
 )
 
-file(GLOB SRC_FILES "src/*.c") # Load all files in src folder
+include_directories(
+	src
+	src/Config
+	lufa
+)
+
+file(GLOB SRC_FILES
+	src/*.c
+	# common
+	${LUFA_ROOT_PATH}/Drivers/USB/Core/${ARCH}/USBController_${ARCH}.c
+	${LUFA_ROOT_PATH}/Drivers/USB/Core/${ARCH}/USBInterrupt_${ARCH}.c
+	${LUFA_ROOT_PATH}/Drivers/USB/Core/ConfigDescriptors.c
+	${LUFA_ROOT_PATH}/Drivers/USB/Core/Events.c
+	${LUFA_ROOT_PATH}/Drivers/USB/Core/USBTask.c
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Common/HIDParser.c
+	# host
+	${LUFA_ROOT_PATH}/Drivers/USB/Core/${ARCH}/Host_${ARCH}.c
+	${LUFA_ROOT_PATH}/Drivers/USB/Core/${ARCH}/Pipe_${ARCH}.c
+	${LUFA_ROOT_PATH}/Drivers/USB/Core/${ARCH}/PipeStream_${ARCH}.c
+	${LUFA_ROOT_PATH}/Drivers/USB/Core/HostStandardReq.c
+	# device
+	${LUFA_ROOT_PATH}/Drivers/USB/Core/${ARCH}/Device_${ARCH}.c
+	${LUFA_ROOT_PATH}/Drivers/USB/Core/${ARCH}/Endpoint_${ARCH}.c
+	${LUFA_ROOT_PATH}/Drivers/USB/Core/${ARCH}/EndpointStream_${ARCH}.c
+	${LUFA_ROOT_PATH}/Drivers/USB/Core/DeviceStandardReq.c
+	# usbclass device
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Device/AudioClassDevice.c
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Device/CDCClassDevice.c
+	${LUFA_ROOT_PATH}/Drivers/USB/Class/Device/HIDClassDevice.c
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Device/MassStorageClassDevice.c
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Device/MIDIClassDevice.c
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Device/PrinterClassDevice.c
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Device/RNDISClassDevice.c
+	# usbclass host
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Host/AndroidAccessoryClassHost.c
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Host/AudioClassHost.c
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Host/CDCClassHost.c
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Host/HIDClassHost.c
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Host/MassStorageClassHost.c
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Host/MIDIClassHost.c
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Host/PrinterClassHost.c
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Host/RNDISClassHost.c
+	#${LUFA_ROOT_PATH}/Drivers/USB/Class/Host/StillImageClassHost.c
+)
 
 SET_SOURCE_FILES_PROPERTIES(src/usbdrv/usbdrvasm.S PROPERTIES LANGUAGE C)
 
@@ -61,23 +93,6 @@ add_custom_target(strip ALL avr-strip ${PRODUCT_NAME}.elf DEPENDS ${PRODUCT_NAME
 
 # Transform binary into hex file, we ignore the eeprom segments in the step
 add_custom_target(hex ALL avr-objcopy -R .eeprom -O ihex ${PRODUCT_NAME}.elf ${PRODUCT_NAME}.hex DEPENDS strip)
-# Transform binary into hex file, this is the eeprom part (empty if you don't
-# use eeprom static variables)
-add_custom_target(eeprom avr-objcopy -j .eeprom  --set-section-flags=.eeprom="alloc,load"  --change-section-lma .eeprom=0 -O ihex ${PRODUCT_NAME}.elf ${PRODUCT_NAME}.eep DEPENDS strip)
-
-add_custom_target(scp bash -lc 'scp ${PRODUCT_NAME}.hex ${SSH_LOGIN}:/tmp/${PRODUCT_NAME}.hex' DEPENDS hex)
-
-# Upload the firmware with avrdude
-add_custom_target(upload bash -lc '${AVRDUDE} -c ${PROG_TYPE} -p ${MCU} -U flash:w:/tmp/${PRODUCT_NAME}.hex' DEPENDS scp)
-
-# Upload the eeprom with avrdude
-add_custom_target(upload_eeprom bash -lc '${AVRDUDE} -c ${PROG_TYPE} -p ${MCU}  -U eeprom:w:${PRODUCT_NAME}.eep' DEPENDS eeprom)
-
-# Burn fuses
-add_custom_target(fuses bash -lc '${AVRDUDE} -c ${PROG_TYPE} -p ${MCU} -U lfuse:w:${L_FUSE}:m -U hfuse:w:${H_FUSE}:m')
-
-# -v
-add_custom_target(view bash -lc '${AVRDUDE} -c ${PROG_TYPE} -p ${MCU} -v')
 
 # Clean extra files
 set_directory_properties(PROPERTIES ADDITIONAL_MAKE_CLEAN_FILES "${PRODUCT_NAME}.hex;${PRODUCT_NAME}.eeprom;${PRODUCT_NAME}.lst")
